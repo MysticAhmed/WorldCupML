@@ -34,12 +34,14 @@ STAGE_ORDINAL_MAP = {
     "Group 5": 1, "Group 6": 1, "Group 7": 1, "Group 8": 1,
     "Group A": 1, "Group B": 1, "Group C": 1, "Group D": 1,
     "Group E": 1, "Group F": 1, "Group G": 1, "Group H": 1,
+    "Group I": 1, "Group J": 1, "Group K": 1, "Group L": 1,
     "Preliminary round": 1, "First round": 1,
-    "Round of 16": 2,
-    "Quarter-finals": 3,
-    "Semi-finals": 4,
-    "Third place": 5, "Match for third place": 5,
-    "Final": 6,
+    "Round of 32": 2,
+    "Round of 16": 3,
+    "Quarter-finals": 4,
+    "Semi-finals": 5,
+    "Third place": 6, "Match for third place": 6,
+    "Final": 7,
 }
 
 # ── Tournament importance weights (for ELO K-factor scaling) ─────────────────

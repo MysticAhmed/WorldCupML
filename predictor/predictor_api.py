@@ -27,6 +27,7 @@ class PredictorAPI:
     def __init__(self, model, feature_engineer: FeatureEngineer):
         self.model = model
         self.feature_engineer = feature_engineer
+        self._prediction_cache: dict[tuple[str, str], MatchPrediction] = {}
 
         # Build case-insensitive team name lookup from WC matches + international results
         all_teams: set[str] = set()
@@ -51,6 +52,10 @@ class PredictorAPI:
         home_canonical = self._resolve_team(home_team)
         away_canonical = self._resolve_team(away_team)
 
+        cache_key = (home_canonical, away_canonical)
+        if cache_key in self._prediction_cache:
+            return self._prediction_cache[cache_key]
+
         X = self.feature_engineer.build_features_for_match(
             home_canonical, away_canonical, stage_ordinal=6, is_neutral=True
         )
@@ -64,9 +69,11 @@ class PredictorAPI:
         best_class_int = int(np.argmax(proba))
         predicted_label = OUTCOME_INT_MAP[best_class_int]
 
-        return MatchPrediction(
+        prediction = MatchPrediction(
             home_win_prob=home_win_prob,
             away_win_prob=away_win_prob,
             draw_prob=draw_prob,
             predicted_label=predicted_label,
         )
+        self._prediction_cache[cache_key] = prediction
+        return prediction

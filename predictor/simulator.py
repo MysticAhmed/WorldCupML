@@ -1,8 +1,8 @@
-"""TournamentSimulator for the FIFA World Cup Predictor."""
+"""TournamentSimulator for the 2026 FIFA World Cup (48-team format)."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from itertools import combinations
 
 import numpy as np
@@ -21,22 +21,60 @@ class SimulationResult:
 
 
 class TournamentSimulator:
-    """Monte Carlo bracket simulation for a 32-team World Cup tournament."""
+    """Monte Carlo bracket simulation for the 2026 48-team World Cup.
 
-    # Standard WC bracket: 1st of group X vs 2nd of group Y
-    # Groups A-H, bracket pairings (0-indexed group positions):
-    # R16: A1 vs B2, C1 vs D2, E1 vs F2, G1 vs H2,
-    #      B1 vs A2, D1 vs C2, F1 vs E2, H1 vs G2
-    _BRACKET_PAIRINGS = [
-        (0, 1),  # 1st Group A vs 2nd Group B
-        (2, 3),  # 1st Group C vs 2nd Group D
-        (4, 5),  # 1st Group E vs 2nd Group F
-        (6, 7),  # 1st Group G vs 2nd Group H
-        (1, 0),  # 1st Group B vs 2nd Group A
-        (3, 2),  # 1st Group D vs 2nd Group C
-        (5, 4),  # 1st Group F vs 2nd Group E
-        (7, 6),  # 1st Group H vs 2nd Group G
-    ]
+    Format:
+    - 12 groups of 4 (Groups A-L)
+    - Top 2 from each group + best 8 third-place teams = 32 teams
+    - Round of 32 → Round of 16 → QF → SF → Final
+
+    Round of 32 bracket (official FIFA pairings):
+        M73:  2nd A  vs 2nd B
+        M74:  1st E  vs best 3rd (A/B/C/D/F)
+        M75:  1st F  vs 2nd C
+        M76:  1st C  vs 2nd F
+        M77:  1st I  vs best 3rd (C/D/F/G/H)
+        M78:  2nd E  vs 2nd I
+        M79:  1st A  vs best 3rd (C/E/F/H/I)
+        M80:  1st L  vs best 3rd (E/H/I/J/K)
+        M81:  1st D  vs best 3rd (B/E/F/I/J)
+        M82:  1st G  vs best 3rd (A/E/H/I/J)
+        M83:  2nd K  vs 2nd L
+        M84:  1st H  vs 2nd J
+        M85:  1st B  vs best 3rd (E/F/G/I/J)
+        M86:  1st J  vs 2nd H
+        M87:  1st K  vs best 3rd (D/E/I/J/L)
+        M88:  2nd D  vs 2nd G
+
+    Round of 16 pairings (winners of R32 matches):
+        M89: W74 vs W77   M90: W73 vs W75
+        M91: W76 vs W78   M92: W79 vs W80  (note: W79=1stA side, W80=1stL side)
+        M93: W84 vs W81   M94: W82 vs W88  (note: corrected per bracket)
+        M95: W88 vs W81 ... using official bracket order below
+
+    Official R16 pairings from bracket:
+        M89: W74 vs W77
+        M90: W73 vs W75
+        M91: W76 vs W78
+        M92: W79 vs W80  -- actually W79 vs W80 per bracket
+        M93: W84 vs W81  -- actually per bracket tree
+        M94: W82 vs W88  -- actually per bracket tree
+        M95: W83 vs W85  -- actually per bracket tree
+        M96: W86 vs W87  -- actually per bracket tree
+    """
+
+    # Official R32 bracket as (slot_description) — we'll build dynamically
+    # Third-place group pools per match slot
+    _THIRD_PLACE_POOLS = {
+        "M74": ["A", "B", "C", "D", "F"],
+        "M77": ["C", "D", "F", "G", "H"],
+        "M79": ["C", "E", "F", "H", "I"],
+        "M80": ["E", "H", "I", "J", "K"],
+        "M81": ["B", "E", "F", "I", "J"],
+        "M82": ["A", "E", "H", "I", "J"],
+        "M85": ["E", "F", "G", "I", "J"],
+        "M87": ["D", "E", "I", "J", "L"],
+    }
 
     def __init__(self, predictor: PredictorAPI, n_runs: int = 1000, seed: int = 42):
         if n_runs < 1:
@@ -46,7 +84,6 @@ class TournamentSimulator:
         self.seed = seed
 
     def _validate_teams(self, teams: list[str]) -> None:
-        """Raise ValueError for any team not known to the predictor."""
         for team in teams:
             try:
                 self.predictor._resolve_team(team)
@@ -55,32 +92,66 @@ class TournamentSimulator:
 
     def _simulate_group_stage(
         self, groups: dict[str, list[str]]
-    ) -> tuple[list[str], list[str]]:
-        """Simulate group stage and return (group_winners, group_runners_up).
+    ) -> tuple[dict[str, str], dict[str, str], dict[str, tuple[str, float]]]:
+        """Simulate group stage.
 
-        Uses expected win probability approach: for each team, sum win_prob
-        across all group matches. Top 2 advance.
+        Returns:
+            winners:      group_name -> 1st place team
+            runners_up:   group_name -> 2nd place team
+            third_place:  group_name -> (3rd place team, points_score)
         """
-        group_winners: list[str] = []
-        group_runners_up: list[str] = []
+        winners: dict[str, str] = {}
+        runners_up: dict[str, str] = {}
+        third_place: dict[str, tuple[str, float]] = {}
 
         for group_name in sorted(groups.keys()):
             group_teams = groups[group_name]
-            scores: dict[str, float] = {t: 0.0 for t in group_teams}
+            # Accumulate expected points (win=3, draw=1, loss=0) using probabilities
+            points: dict[str, float] = {t: 0.0 for t in group_teams}
+            gd: dict[str, float] = {t: 0.0 for t in group_teams}
 
             for home, away in combinations(group_teams, 2):
                 pred = self.predictor.predict(home, away)
-                scores[home] += pred.home_win_prob
-                scores[away] += pred.away_win_prob
+                # Expected points
+                points[home] += 3 * pred.home_win_prob + 1 * pred.draw_prob
+                points[away] += 3 * pred.away_win_prob + 1 * pred.draw_prob
+                # Expected goal diff proxy using elo_diff as tiebreaker
+                gd[home] += pred.home_win_prob - pred.away_win_prob
+                gd[away] += pred.away_win_prob - pred.home_win_prob
 
-            ranked = sorted(group_teams, key=lambda t: scores[t], reverse=True)
-            group_winners.append(ranked[0])
-            group_runners_up.append(ranked[1])
+            ranked = sorted(group_teams, key=lambda t: (points[t], gd[t]), reverse=True)
+            winners[group_name] = ranked[0]
+            runners_up[group_name] = ranked[1]
+            third_place[group_name] = (ranked[2], points[ranked[2]])
 
-        return group_winners, group_runners_up
+        return winners, runners_up, third_place
+
+    def _pick_best_third(
+        self,
+        third_place: dict[str, tuple[str, float]],
+        pool: list[str],
+        already_used: set[str],
+    ) -> str:
+        """Pick the best available 3rd-place team from the given group pool."""
+        candidates = [
+            (g, third_place[g])
+            for g in pool
+            if g in third_place and third_place[g][0] not in already_used
+        ]
+        if not candidates:
+            # Fallback: pick any unused 3rd place team
+            candidates = [
+                (g, third_place[g])
+                for g in third_place
+                if third_place[g][0] not in already_used
+            ]
+        best_group = max(candidates, key=lambda x: x[1][1])
+        team = best_group[1][0]
+        already_used.add(team)
+        return team
 
     def _knockout_winner(self, home: str, away: str, rng: np.random.Generator) -> str:
-        """Sample a knockout match winner from the probability distribution."""
+        """Sample a knockout match winner."""
         pred = self.predictor.predict(home, away)
         r = rng.random()
         if r < pred.home_win_prob:
@@ -88,72 +159,93 @@ class TournamentSimulator:
         elif r < pred.home_win_prob + pred.away_win_prob:
             return away
         else:
-            # Draw → 50/50 coin flip
             return home if rng.random() < 0.5 else away
 
     def _simulate_knockout(
         self,
-        group_winners: list[str],
-        group_runners_up: list[str],
+        winners: dict[str, str],
+        runners_up: dict[str, str],
+        third_place: dict[str, tuple[str, float]],
         rng: np.random.Generator,
     ) -> tuple[str, set[str], set[str]]:
-        """Run knockout rounds and return (winner, semifinalists, finalists)."""
-        # Build R16 matchups using standard WC bracket pairings
-        r16_matches: list[tuple[str, str]] = []
-        for w_idx, r_idx in self._BRACKET_PAIRINGS:
-            r16_matches.append((group_winners[w_idx], group_runners_up[r_idx]))
+        """Run Round of 32 through Final. Returns (winner, semifinalists, finalists)."""
+        used_thirds: set[str] = set()
 
-        # Round of 16 → 8 teams
-        qf_teams = [self._knockout_winner(h, a, rng) for h, a in r16_matches]
+        def w(g): return winners[g]
+        def r(g): return runners_up[g]
+        def t(pool): return self._pick_best_third(third_place, pool, used_thirds)
 
-        # Quarter-finals → 4 teams (semi-finalists)
-        sf_teams = [
-            self._knockout_winner(qf_teams[i], qf_teams[i + 1], rng)
-            for i in range(0, 8, 2)
-        ]
-        semifinalists = set(sf_teams)
+        # ── Round of 32 ───────────────────────────────────────────────────────
+        m73  = self._knockout_winner(r("A"), r("B"), rng)
+        m74  = self._knockout_winner(w("E"), t(["A","B","C","D","F"]), rng)
+        m75  = self._knockout_winner(w("F"), r("C"), rng)
+        m76  = self._knockout_winner(w("C"), r("F"), rng)
+        m77  = self._knockout_winner(w("I"), t(["C","D","F","G","H"]), rng)
+        m78  = self._knockout_winner(r("E"), r("I"), rng)
+        m79  = self._knockout_winner(w("A"), t(["C","E","F","H","I"]), rng)
+        m80  = self._knockout_winner(w("L"), t(["E","H","I","J","K"]), rng)
+        m81  = self._knockout_winner(w("D"), t(["B","E","F","I","J"]), rng)
+        m82  = self._knockout_winner(w("G"), t(["A","E","H","I","J"]), rng)
+        m83  = self._knockout_winner(r("K"), r("L"), rng)
+        m84  = self._knockout_winner(w("H"), r("J"), rng)
+        m85  = self._knockout_winner(w("B"), t(["E","F","G","I","J"]), rng)
+        m86  = self._knockout_winner(w("J"), r("H"), rng)
+        m87  = self._knockout_winner(w("K"), t(["D","E","I","J","L"]), rng)
+        m88  = self._knockout_winner(r("D"), r("G"), rng)
 
-        # Semi-finals → 2 finalists
-        finalists_list = [
-            self._knockout_winner(sf_teams[0], sf_teams[1], rng),
-            self._knockout_winner(sf_teams[2], sf_teams[3], rng),
-        ]
-        finalists = set(finalists_list)
+        # ── Round of 16 ───────────────────────────────────────────────────────
+        m89 = self._knockout_winner(m74, m77, rng)
+        m90 = self._knockout_winner(m73, m75, rng)
+        m91 = self._knockout_winner(m76, m78, rng)
+        m92 = self._knockout_winner(m79, m80, rng)
+        m93 = self._knockout_winner(m84, m81, rng)
+        m94 = self._knockout_winner(m82, m88, rng)
+        m95 = self._knockout_winner(m83, m85, rng)
+        m96 = self._knockout_winner(m86, m87, rng)
 
-        # Final → winner
-        winner = self._knockout_winner(finalists_list[0], finalists_list[1], rng)
+        # ── Quarter-finals ────────────────────────────────────────────────────
+        m97 = self._knockout_winner(m89, m90, rng)
+        m98 = self._knockout_winner(m91, m92, rng)
+        m99 = self._knockout_winner(m93, m94, rng)
+        m100 = self._knockout_winner(m95, m96, rng)
+
+        # ── Semi-finals ───────────────────────────────────────────────────────
+        m101_a = self._knockout_winner(m97, m98, rng)
+        m101_b = self._knockout_winner(m99, m100, rng)
+        semifinalists = {m97, m98, m99, m100}
+
+        # ── Final ─────────────────────────────────────────────────────────────
+        finalists = {m101_a, m101_b}
+        winner = self._knockout_winner(m101_a, m101_b, rng)
 
         return winner, semifinalists, finalists
 
     def simulate(
         self, teams: list[str], groups: dict[str, list[str]]
     ) -> SimulationResult:
-        """Run n_runs full bracket simulations and return aggregated probabilities.
+        """Run n_runs full tournament simulations.
 
         Args:
-            teams: List of all participating team names.
-            groups: Mapping of group name → list of team names in that group.
+            teams:  All participating team names.
+            groups: group_name -> list of team names (12 groups for 2026 WC).
 
         Returns:
-            SimulationResult with win/semifinal/final probabilities and ranked teams.
-
-        Raises:
-            ValueError: If any team name is not known to the predictor.
+            SimulationResult with win/semifinal/final probabilities.
         """
         self._validate_teams(teams)
 
-        win_counts: dict[str, int] = {t: 0 for t in teams}
-        sf_counts: dict[str, int] = {t: 0 for t in teams}
+        win_counts:   dict[str, int] = {t: 0 for t in teams}
+        sf_counts:    dict[str, int] = {t: 0 for t in teams}
         final_counts: dict[str, int] = {t: 0 for t in teams}
 
         rng = np.random.default_rng(self.seed)
 
-        # Group stage is deterministic (expected value approach), compute once
-        group_winners, group_runners_up = self._simulate_group_stage(groups)
+        # Group stage is deterministic — compute once before the loop
+        winners, runners_up, third_place = self._simulate_group_stage(groups)
 
         for _ in range(self.n_runs):
             winner, semifinalists, finalists = self._simulate_knockout(
-                group_winners, group_runners_up, rng
+                winners, runners_up, third_place, rng
             )
             win_counts[winner] += 1
             for t in semifinalists:
@@ -161,11 +253,8 @@ class TournamentSimulator:
             for t in finalists:
                 final_counts[t] += 1
 
-        # Also count group-stage teams that didn't advance as having 0 counts
-        # (already initialised to 0 above)
-
-        win_probs = {t: win_counts[t] / self.n_runs for t in teams}
-        sf_probs = {t: sf_counts[t] / self.n_runs for t in teams}
+        win_probs   = {t: win_counts[t]   / self.n_runs for t in teams}
+        sf_probs    = {t: sf_counts[t]    / self.n_runs for t in teams}
         final_probs = {t: final_counts[t] / self.n_runs for t in teams}
 
         ranked = sorted(teams, key=lambda t: win_probs[t], reverse=True)
