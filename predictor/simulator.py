@@ -93,36 +93,37 @@ class TournamentSimulator:
     def _simulate_group_stage(
         self, groups: dict[str, list[str]]
     ) -> tuple[dict[str, str], dict[str, str], dict[str, tuple[str, float]]]:
-        """Simulate group stage.
+        """Simulate group stage with stochastic match outcomes.
 
-        Returns:
-            winners:      group_name -> 1st place team
-            runners_up:   group_name -> 2nd place team
-            third_place:  group_name -> (3rd place team, points_score)
+        Each match is sampled from predicted probabilities rather than using
+        expected points, giving realistic upset potential.
         """
+        rng = np.random.default_rng()  # fresh rng per call for stochasticity
         winners: dict[str, str] = {}
         runners_up: dict[str, str] = {}
         third_place: dict[str, tuple[str, float]] = {}
 
         for group_name in sorted(groups.keys()):
             group_teams = groups[group_name]
-            # Accumulate expected points (win=3, draw=1, loss=0) using probabilities
-            points: dict[str, float] = {t: 0.0 for t in group_teams}
+            points: dict[str, int] = {t: 0 for t in group_teams}
             gd: dict[str, float] = {t: 0.0 for t in group_teams}
 
             for home, away in combinations(group_teams, 2):
                 pred = self.predictor.predict(home, away)
-                # Expected points
-                points[home] += 3 * pred.home_win_prob + 1 * pred.draw_prob
-                points[away] += 3 * pred.away_win_prob + 1 * pred.draw_prob
-                # Expected goal diff proxy using elo_diff as tiebreaker
-                gd[home] += pred.home_win_prob - pred.away_win_prob
-                gd[away] += pred.away_win_prob - pred.home_win_prob
+                r = rng.random()
+                if r < pred.home_win_prob:
+                    points[home] += 3
+                    gd[home] += 1; gd[away] -= 1
+                elif r < pred.home_win_prob + pred.draw_prob:
+                    points[home] += 1; points[away] += 1
+                else:
+                    points[away] += 3
+                    gd[away] += 1; gd[home] -= 1
 
             ranked = sorted(group_teams, key=lambda t: (points[t], gd[t]), reverse=True)
             winners[group_name] = ranked[0]
             runners_up[group_name] = ranked[1]
-            third_place[group_name] = (ranked[2], points[ranked[2]])
+            third_place[group_name] = (ranked[2], float(points[ranked[2]]))
 
         return winners, runners_up, third_place
 
@@ -240,10 +241,9 @@ class TournamentSimulator:
 
         rng = np.random.default_rng(self.seed)
 
-        # Group stage is deterministic — compute once before the loop
-        winners, runners_up, third_place = self._simulate_group_stage(groups)
-
+        # Group stage is now stochastic — run inside the loop
         for _ in range(self.n_runs):
+            winners, runners_up, third_place = self._simulate_group_stage(groups)
             winner, semifinalists, finalists = self._simulate_knockout(
                 winners, runners_up, third_place, rng
             )

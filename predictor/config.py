@@ -104,6 +104,11 @@ FEATURE_COLS = [
     "opp_avg_goals_scored",
     "opp_avg_goals_conceded",
     "opp_avg_goal_diff",
+    # Recent form (last 20 matches)
+    "team_recent_win_rate",
+    "team_recent_avg_goal_diff",
+    "opp_recent_win_rate",
+    "opp_recent_avg_goal_diff",
     # Head-to-head
     "h2h_team_win_rate",
     "h2h_draw_rate",

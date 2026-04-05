@@ -215,6 +215,41 @@ class FeatureEngineer:
         self._rolling_stats_cache[key] = result
         return result
 
+    def _recent_team_stats(self, team: str, year: int, window: int = 20) -> dict:
+        """Recent form stats using last `window` matches before year."""
+        key = (team, year, window)
+        if key in self._rolling_stats_cache:
+            return self._rolling_stats_cache[key]
+
+        df = self.results_df
+        prior = df[
+            ((df["home_team"] == team) | (df["away_team"] == team)) &
+            (df["year"] < year)
+        ].sort_values("date").tail(window)
+
+        records = []
+        for _, r in prior.iterrows():
+            if r["home_team"] == team:
+                gs, gc = r["home_score"], r["away_score"]
+            else:
+                gs, gc = r["away_score"], r["home_score"]
+            records.append({
+                "gs": gs, "gc": gc,
+                "result": "win" if gs > gc else ("loss" if gs < gc else "draw"),
+            })
+
+        if not records:
+            result = {"recent_win_rate": np.nan, "recent_avg_goal_diff": np.nan}
+            self._rolling_stats_cache[key] = result
+            return result
+
+        n = len(records)
+        wins = sum(1 for r in records if r["result"] == "win")
+        avg_gd = sum(r["gs"] - r["gc"] for r in records) / n
+        result = {"recent_win_rate": wins / n, "recent_avg_goal_diff": avg_gd}
+        self._rolling_stats_cache[key] = result
+        return result
+
     def _head_to_head_stats(self, team_a: str, team_b: str, year: int) -> dict:
         """H2H stats from all international matches before year."""
         key = (team_a, team_b, year)
@@ -399,6 +434,10 @@ class FeatureEngineer:
             hs = self._rolling_team_stats(home_team, year)
             as_ = self._rolling_team_stats(away_team, year)
 
+            # Recent form
+            h_recent = self._recent_team_stats(home_team, year)
+            a_recent = self._recent_team_stats(away_team, year)
+
             # H2H
             h2h_h = self._head_to_head_stats(home_team, away_team, year)
             h2h_a = self._head_to_head_stats(away_team, home_team, year)
@@ -417,8 +456,9 @@ class FeatureEngineer:
             else:
                 out_h = out_a = "Draw"
 
-            def _row(focal_stats, opp_stats, h2h, focal_elo, opp_elo,
-                     focal_gpp, opp_gpp, focal_team, opp_team, outcome):
+            def _row(focal_stats, opp_stats, focal_recent, opp_recent, h2h,
+                     focal_elo, opp_elo, focal_gpp, opp_gpp,
+                     focal_team, opp_team, outcome):
                 return {
                     "focal_team": focal_team,
                     "opponent": opp_team,
@@ -435,6 +475,10 @@ class FeatureEngineer:
                     "opp_avg_goals_scored": opp_stats["avg_goals_scored"],
                     "opp_avg_goals_conceded": opp_stats["avg_goals_conceded"],
                     "opp_avg_goal_diff": opp_stats["avg_goal_diff"],
+                    "team_recent_win_rate": focal_recent["recent_win_rate"],
+                    "team_recent_avg_goal_diff": focal_recent["recent_avg_goal_diff"],
+                    "opp_recent_win_rate": opp_recent["recent_win_rate"],
+                    "opp_recent_avg_goal_diff": opp_recent["recent_avg_goal_diff"],
                     "h2h_team_win_rate": h2h["h2h_win_rate"],
                     "h2h_draw_rate": h2h["h2h_draw_rate"],
                     "h2h_avg_goal_diff": h2h["h2h_avg_goal_diff"],
@@ -449,10 +493,10 @@ class FeatureEngineer:
                     TARGET_COL: outcome,
                 }
 
-            rows.append(_row(hs, as_, h2h_h, home_elo, away_elo, h_goals_pp, a_goals_pp,
-                             home_team, away_team, out_h))
-            rows.append(_row(as_, hs, h2h_a, away_elo, home_elo, a_goals_pp, h_goals_pp,
-                             away_team, home_team, out_a))
+            rows.append(_row(hs, as_, h_recent, a_recent, h2h_h, home_elo, away_elo,
+                             h_goals_pp, a_goals_pp, home_team, away_team, out_h))
+            rows.append(_row(as_, hs, a_recent, h_recent, h2h_a, away_elo, home_elo,
+                             a_goals_pp, h_goals_pp, away_team, home_team, out_a))
 
         df = pd.DataFrame(rows)
         df = self._fill_cold_start(df)
@@ -472,6 +516,8 @@ class FeatureEngineer:
 
         hs = self._rolling_team_stats(home_team, future_year)
         as_ = self._rolling_team_stats(away_team, future_year)
+        h_recent = self._recent_team_stats(home_team, future_year)
+        a_recent = self._recent_team_stats(away_team, future_year)
         h2h = self._head_to_head_stats(home_team, away_team, future_year)
 
         home_elo = CURRENT_ELO_RATINGS.get(
@@ -499,6 +545,10 @@ class FeatureEngineer:
             "opp_avg_goals_scored": as_["avg_goals_scored"],
             "opp_avg_goals_conceded": as_["avg_goals_conceded"],
             "opp_avg_goal_diff": as_["avg_goal_diff"],
+            "team_recent_win_rate": h_recent["recent_win_rate"],
+            "team_recent_avg_goal_diff": h_recent["recent_avg_goal_diff"],
+            "opp_recent_win_rate": a_recent["recent_win_rate"],
+            "opp_recent_avg_goal_diff": a_recent["recent_avg_goal_diff"],
             "h2h_team_win_rate": h2h["h2h_win_rate"],
             "h2h_draw_rate": h2h["h2h_draw_rate"],
             "h2h_avg_goal_diff": h2h["h2h_avg_goal_diff"],
