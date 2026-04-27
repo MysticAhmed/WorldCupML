@@ -1,48 +1,48 @@
 team,win_prob,semifinal_prob,final_prob
-Netherlands,0.182,0.371,0.272
-Argentina,0.18,0.458,0.342
-Germany,0.171,0.407,0.25
-France,0.102,0.279,0.162
-Brazil,0.082,0.306,0.139
-Norway,0.045,0.18,0.078
-Switzerland,0.044,0.186,0.121
-Colombia,0.043,0.183,0.097
-Spain,0.032,0.216,0.093
-Turkey,0.032,0.286,0.116
-Belgium,0.023,0.242,0.093
-Portugal,0.021,0.13,0.062
-England,0.014,0.132,0.037
-Uruguay,0.007,0.1,0.036
-Ecuador,0.004,0.099,0.014
-Canada,0.004,0.031,0.01
-Austria,0.003,0.07,0.018
-Croatia,0.003,0.021,0.003
-Czech Republic,0.002,0.038,0.01
-New Zealand,0.002,0.018,0.004
-Sweden,0.001,0.022,0.004
-Mexico,0.001,0.063,0.015
-Japan,0.001,0.06,0.014
-Australia,0.001,0.024,0.002
-Tunisia,0.0,0.0,0.0
-Algeria,0.0,0.001,0.001
-Ghana,0.0,0.002,0.001
-South Korea,0.0,0.001,0.0
-Bosnia and Herzegovina,0.0,0.001,0.0
-Qatar,0.0,0.0,0.0
-Uzbekistan,0.0,0.002,0.001
-DR Congo,0.0,0.003,0.0
+Argentina,0.203,0.47,0.343
+Germany,0.189,0.394,0.263
+Netherlands,0.147,0.379,0.257
+France,0.103,0.28,0.172
+Brazil,0.083,0.319,0.138
+Switzerland,0.053,0.19,0.122
+Colombia,0.041,0.172,0.096
+Turkey,0.041,0.293,0.133
+Norway,0.039,0.21,0.079
+Portugal,0.027,0.138,0.075
+Spain,0.018,0.194,0.078
+Belgium,0.015,0.231,0.076
+Uruguay,0.012,0.108,0.039
+Austria,0.006,0.079,0.025
+England,0.006,0.114,0.027
+Ecuador,0.004,0.068,0.015
+Japan,0.004,0.074,0.019
+Mexico,0.004,0.065,0.008
+Paraguay,0.002,0.045,0.005
+Czech Republic,0.002,0.03,0.006
+Croatia,0.001,0.02,0.006
+Ivory Coast,0.0,0.001,0.0
 Morocco,0.0,0.0,0.0
-Jordan,0.0,0.005,0.0
-Haiti,0.0,0.002,0.0
+Ghana,0.0,0.001,0.0
+South Korea,0.0,0.001,0.0
+Uzbekistan,0.0,0.001,0.0
+DR Congo,0.0,0.001,0.0
+Canada,0.0,0.029,0.006
+Jordan,0.0,0.005,0.001
+Bosnia and Herzegovina,0.0,0.001,0.0
+Algeria,0.0,0.002,0.0
+Qatar,0.0,0.0,0.0
 Iraq,0.0,0.001,0.0
-Scotland,0.0,0.003,0.001
-South Africa,0.0,0.001,0.0
-USA,0.0,0.001,0.0
-Senegal,0.0,0.006,0.0
-Paraguay,0.0,0.027,0.002
+Senegal,0.0,0.0,0.0
+Australia,0.0,0.022,0.003
+Haiti,0.0,0.003,0.001
+Scotland,0.0,0.006,0.001
 Saudi Arabia,0.0,0.001,0.0
-Cape Verde,0.0,0.005,0.001
-Ivory Coast,0.0,0.002,0.0
+Cape Verde,0.0,0.006,0.002
+USA,0.0,0.001,0.0
+New Zealand,0.0,0.007,0.002
 Iran,0.0,0.002,0.0
-Egypt,0.0,0.009,0.001
-Panama,0.0,0.003,0.0
+Egypt,0.0,0.01,0.0
+South Africa,0.0,0.001,0.0
+Tunisia,0.0,0.0,0.0
+Sweden,0.0,0.019,0.002
+Panama,0.0,0.006,0.0
