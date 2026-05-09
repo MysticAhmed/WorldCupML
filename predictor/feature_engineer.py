@@ -1,4 +1,40 @@
-"""Feature engineering using the full international results dataset + ELO ratings."""
+"""Feature engineering using the full international results dataset + ELO ratings.
+
+This is the core of our prediction system. We engineer 28 features from raw match data:
+
+1. **Rolling Statistics** (12 features): Career win/draw/loss rates, goals scored/conceded
+   - Computed from ALL international matches before each World Cup match
+   - Gives us long-term team strength indicators
+
+2. **Recent Form** (4 features): Performance in last 20 matches
+   - Captures current momentum and form
+   - More recent matches weighted equally (simple window)
+
+3. **Head-to-Head** (3 features): Historical matchup statistics
+   - Win rate, draw rate, goal difference in prior meetings
+   - Captures specific rivalry dynamics
+
+4. **ELO Ratings** (3 features): Dynamic skill ratings
+   - Updated after every international match using standard ELO algorithm
+   - Accounts for opponent strength, home advantage, tournament importance
+   - More responsive to recent results than career stats
+
+5. **Match Context** (3 features): Tournament stage, importance, venue
+   - Stage ordinal (1=group, 7=final) captures knockout pressure
+   - Tournament weight (1.0 for WC, 0.4 for friendlies)
+   - Neutral venue flag (always True for WC, varies for qualifiers)
+
+6. **Player Quality** (2 features): Goal-scoring ability from WC squads
+   - Average goal events per player from prior World Cups
+   - Proxy for squad quality (better teams have more prolific scorers)
+
+7. **Year** (1 feature): Tournament year
+   - Captures era effects (rule changes, tactical evolution)
+
+The key insight: we use 45k+ international matches to build ELO and rolling stats,
+then apply these features to predict World Cup outcomes. This gives us much more
+data than using World Cup matches alone (only ~1000 matches).
+"""
 
 from __future__ import annotations
 
@@ -24,6 +60,10 @@ class FeatureEngineer:
 
     Uses results_df (45k+ international matches) for rolling stats and ELO,
     and matches_df (WC only) for WC-specific features and training targets.
+    
+    CRITICAL: All features are computed using ONLY data from BEFORE each match.
+    This prevents data leakage - we never use future information to predict past matches.
+    For a 2018 match, we only use data from 2017 and earlier.
     """
 
     def __init__(
@@ -32,7 +72,7 @@ class FeatureEngineer:
         players_df: pd.DataFrame,
         results_df: pd.DataFrame | None = None,
     ):
-        # Clean matches_df: ensure Year is valid
+        # Clean matches_df: ensure Year is valid for temporal filtering
         matches_df = matches_df.dropna(subset=["Year"]).copy()
         matches_df["Year"] = matches_df["Year"].astype(int)
         
@@ -40,6 +80,7 @@ class FeatureEngineer:
         self.players_df = players_df.copy()
 
         # Use international results if provided, otherwise fall back to WC matches only
+        # International results give us 45k+ matches for better ELO and rolling stats
         if results_df is not None and not results_df.empty:
             self.results_df = results_df.copy()
         else:
@@ -47,6 +88,7 @@ class FeatureEngineer:
             self.results_df = self._wc_to_results(self.matches_df)
 
         # Pre-compute ELO timeline from the full results history
+        # This is expensive (45k+ matches), so we do it once upfront
         self._elo_timeline: dict[str, dict[int, float]] = {}  # team -> {match_index -> elo}
         self._elo_by_date: pd.DataFrame = pd.DataFrame()
         self._compute_elo_timeline()
@@ -56,6 +98,7 @@ class FeatureEngineer:
         self._build_global_name_initials()
 
         # Caches for expensive per-team stat lookups
+        # Without caching, computing features for 1000 WC matches would take hours
         self._rolling_stats_cache: dict[tuple, dict] = {}
         self._h2h_cache: dict[tuple, dict] = {}
         self._player_agg_cache: dict[tuple, float] = {}
@@ -64,11 +107,30 @@ class FeatureEngineer:
     # ── ELO computation ───────────────────────────────────────────────────────
 
     def _compute_elo_timeline(self):
-        """Compute ELO rating for every team after every match in results_df."""
+        """Compute ELO rating for every team after every match in results_df.
+        
+        ELO is a dynamic rating system originally designed for chess.
+        Key properties:
+        - Teams start at 1500 (ELO_INITIAL_RATING)
+        - Winning increases your rating, losing decreases it
+        - Beating a stronger opponent gives more points than beating a weaker one
+        - Ratings are zero-sum: winner's gain = loser's loss (approximately)
+        
+        We enhance standard ELO with:
+        - Home advantage: +100 rating for home team (not neutral venues)
+        - Tournament weighting: World Cup matches count more than friendlies
+        - Goal difference multiplier: bigger wins give more rating change
+        
+        This gives us a single number (ELO rating) that captures team strength
+        and updates dynamically as teams improve or decline.
+        """
+        # Sort by date to process matches chronologically
         df = self.results_df.sort_values("date").reset_index(drop=True)
 
+        # Initialize all teams at 1500 rating
         ratings: dict[str, float] = {}
 
+        # Store pre-match ratings for each match (for temporal lookup)
         records = []
         for _, row in df.iterrows():
             home = row["home_team"]
@@ -83,10 +145,13 @@ class FeatureEngineer:
                 continue
             year = int(year_raw)
 
+            # Get current ratings (or default to 1500 for new teams)
             r_home = ratings.get(home, ELO_INITIAL_RATING)
             r_away = ratings.get(away, ELO_INITIAL_RATING)
 
-            # Store pre-match ratings
+            # Store pre-match ratings (this is what we'll use for features)
+            # CRITICAL: We store ratings BEFORE the match, not after
+            # This prevents data leakage - we predict using only past information
             records.append({
                 "date": date,
                 "year": year,
@@ -96,7 +161,7 @@ class FeatureEngineer:
                 "away_elo_pre": r_away,
             })
 
-            # Update ratings
+            # Update ratings based on match result
             r_home_new, r_away_new = self._elo_update(
                 r_home, r_away, home_score, away_score, neutral, tournament
             )
@@ -104,7 +169,7 @@ class FeatureEngineer:
             ratings[away] = r_away_new
 
         self._elo_by_date = pd.DataFrame(records)
-        # Store final ratings (used for prediction on unseen teams)
+        # Store final ratings (used for prediction on unseen teams in 2026)
         self._final_elo = dict(ratings)
 
     @staticmethod
@@ -116,11 +181,28 @@ class FeatureEngineer:
         neutral: bool,
         tournament: str,
     ) -> tuple[float, float]:
-        """Standard ELO update with home advantage and tournament weighting."""
+        """Standard ELO update with home advantage and tournament weighting.
+        
+        ELO formula:
+        1. Calculate expected win probability using rating difference
+        2. Compare expected vs actual result (1=win, 0.5=draw, 0=loss)
+        3. Update rating: new_rating = old_rating + K * (actual - expected)
+        
+        Enhancements:
+        - Home advantage: Add 100 to home team rating (unless neutral venue)
+        - Tournament weight: Scale K-factor by tournament importance
+        - Goal difference multiplier: Bigger wins → larger rating changes
+        """
+        # Apply home advantage if not neutral venue
         advantage = 0 if neutral else ELO_HOME_ADVANTAGE
+        
+        # Expected win probability using logistic curve
+        # Formula: 1 / (1 + 10^((opponent_rating - your_rating) / 400))
+        # 400 is the standard ELO scale factor (10x rating diff = 10x win probability)
         expected_home = 1 / (1 + 10 ** ((r_away - (r_home + advantage)) / 400))
         expected_away = 1 - expected_home
 
+        # Actual result: 1 for win, 0.5 for draw, 0 for loss
         if home_score > away_score:
             actual_home, actual_away = 1.0, 0.0
         elif home_score < away_score:
@@ -128,23 +210,33 @@ class FeatureEngineer:
         else:
             actual_home, actual_away = 0.5, 0.5
 
+        # Scale K-factor by tournament importance
+        # World Cup: K=32, Friendly: K=12.8
         weight = TOURNAMENT_WEIGHT.get(tournament, DEFAULT_TOURNAMENT_WEIGHT)
         k = ELO_K_BASE * weight
 
-        # Goal difference multiplier (capped at 3)
+        # Goal difference multiplier (capped at 3-goal difference)
+        # 1-goal win: 1.0x, 2-goal win: 1.5x, 3+ goal win: 1.75-2.0x
         gd = abs(home_score - away_score)
         gd_mult = 1.0 if gd <= 1 else (1.5 if gd == 2 else min(1.75 + (gd - 3) * 0.05, 2.0))
 
+        # Apply ELO update formula
         r_home_new = r_home + k * gd_mult * (actual_home - expected_home)
         r_away_new = r_away + k * gd_mult * (actual_away - expected_away)
         return r_home_new, r_away_new
 
     def get_elo_before(self, team: str, date: pd.Timestamp) -> float:
-        """Return the ELO rating for a team just before a given date."""
+        """Return the ELO rating for a team just before a given date.
+        
+        This is critical for preventing data leakage. When predicting a match on
+        June 15, 2018, we need the ELO rating from June 14, 2018 or earlier.
+        We never use the rating AFTER the match we're trying to predict.
+        """
         if self._elo_by_date.empty:
+            # No historical data, use current ratings as fallback
             return CURRENT_ELO_RATINGS.get(team, ELO_INITIAL_RATING)
 
-        # Rows where this team played as home or away, strictly before date
+        # Find all matches where this team played, strictly before the target date
         mask = (
             (
                 (self._elo_by_date["home_team"] == team) |
@@ -153,10 +245,15 @@ class FeatureEngineer:
             (self._elo_by_date["date"] < date)
         )
         prior = self._elo_by_date[mask]
+        
         if prior.empty:
+            # Team has no matches before this date, use default rating
             return CURRENT_ELO_RATINGS.get(team, ELO_INITIAL_RATING)
 
+        # Get the most recent match before target date
         last = prior.iloc[-1]
+        
+        # Return the pre-match rating from that match
         if last["home_team"] == team:
             return float(last["home_elo_pre"])
         return float(last["away_elo_pre"])

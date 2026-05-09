@@ -1,6 +1,12 @@
-"""Shared constants and configuration for the FIFA World Cup Predictor."""
+"""Shared constants and configuration for the FIFA World Cup Predictor.
 
-# Random seed for reproducibility
+This module centralizes all configuration values, file paths, and mappings
+used throughout the predictor system. By keeping these in one place, we ensure
+consistency and make it easy to adjust parameters without modifying core logic.
+"""
+
+# Random seed for reproducibility across all stochastic operations
+# (model training, cross-validation, tournament simulation)
 RANDOM_SEED = 42
 
 # Default paths
@@ -28,6 +34,9 @@ CUPS_REQUIRED_COLS = ["Year", "Winner"]
 RESULTS_REQUIRED_COLS = ["date", "home_team", "away_team", "home_score", "away_score"]
 
 # ── Stage ordinal encoding ────────────────────────────────────────────────────
+# Maps tournament stage names to numeric importance levels (1=lowest, 7=highest)
+# This allows the model to learn that later-stage matches have different dynamics
+# All group stage variations map to 1, knockout rounds increase progressively
 STAGE_ORDINAL_MAP = {
     "Group Stage": 1,
     "Group 1": 1, "Group 2": 1, "Group 3": 1, "Group 4": 1,
@@ -45,7 +54,9 @@ STAGE_ORDINAL_MAP = {
 }
 
 # ── Tournament importance weights (for ELO K-factor scaling) ─────────────────
-# Higher = more important match
+# These weights scale the ELO K-factor based on tournament prestige
+# Higher weight = larger rating changes per match result
+# World Cup matches have maximum weight (1.0), friendlies have minimum (0.40)
 TOURNAMENT_WEIGHT = {
     "FIFA World Cup": 1.0,
     "Confederations Cup": 0.85,
@@ -62,12 +73,15 @@ TOURNAMENT_WEIGHT = {
 DEFAULT_TOURNAMENT_WEIGHT = 0.55  # for unlisted tournaments
 
 # ── ELO parameters ────────────────────────────────────────────────────────────
-ELO_K_BASE = 32          # base K-factor
-ELO_INITIAL_RATING = 1500
-ELO_HOME_ADVANTAGE = 100  # added to home team rating for neutral=False matches
+ELO_K_BASE = 32          # Base K-factor: controls how much ratings change per match
+ELO_INITIAL_RATING = 1500  # Starting rating for teams with no match history
+ELO_HOME_ADVANTAGE = 100  # Rating boost for home team in non-neutral venues
+                          # (World Cup matches are always neutral, so this applies to qualifiers)
 
 # ── Current ELO ratings (April 2026, from eloratings.net) ────────────────────
-# Used to seed the 2026 WC simulation
+# These are real-world ELO ratings used to seed 2026 World Cup predictions
+# For teams not in our historical dataset, we use these as starting points
+# Ratings are updated dynamically as we process historical match results
 CURRENT_ELO_RATINGS = {
     "Spain": 2165, "Argentina": 2113, "France": 2082, "England": 2020,
     "Brazil": 1984, "Portugal": 1984, "Colombia": 1975, "Netherlands": 1961,
@@ -90,6 +104,14 @@ OUTCOME_LABEL_MAP = {"Home Win": 0, "Draw": 1, "Away Win": 2}
 OUTCOME_INT_MAP = {v: k for k, v in OUTCOME_LABEL_MAP.items()}
 
 # ── Feature columns ───────────────────────────────────────────────────────────
+# Complete list of 28 engineered features used for match outcome prediction
+# Features are organized into 6 categories:
+# 1. Rolling stats: career performance metrics from all international matches
+# 2. Recent form: performance in last 20 matches (captures current momentum)
+# 3. Head-to-head: historical matchup statistics between the two teams
+# 4. ELO ratings: skill ratings that update after each match
+# 5. Match context: tournament stage, importance, venue neutrality
+# 6. Player quality: aggregate goal-scoring ability from World Cup squads
 FEATURE_COLS = [
     # Rolling stats (all international matches)
     "team_win_rate",

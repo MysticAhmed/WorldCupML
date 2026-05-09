@@ -1,4 +1,32 @@
-"""TournamentSimulator for the 2026 FIFA World Cup (48-team format)."""
+"""TournamentSimulator for the 2026 FIFA World Cup (48-team format).
+
+This module simulates the entire 2026 World Cup tournament using Monte Carlo methods:
+
+1. **Group Stage**: 12 groups of 4 teams (Groups A-L)
+   - Each team plays 3 matches (round-robin within group)
+   - Top 2 from each group advance (24 teams)
+   - Best 8 third-place teams also advance (8 teams)
+   - Total: 32 teams advance to knockout stage
+
+2. **Knockout Stage**: Single-elimination bracket
+   - Round of 32 (16 matches)
+   - Round of 16 (8 matches)
+   - Quarter-finals (4 matches)
+   - Semi-finals (2 matches)
+   - Final (1 match)
+
+3. **Stochastic Simulation**: Each match outcome is sampled from predicted probabilities
+   - NOT deterministic (highest probability doesn't always win)
+   - Captures realistic upset potential
+   - Run 1000+ times to get stable probability estimates
+
+4. **Official Bracket**: Uses FIFA's official 2026 bracket structure
+   - Third-place team assignments follow FIFA rules
+   - Bracket paths prevent early rematches of group opponents
+
+The simulator outputs win probabilities for each team by counting how many times
+they win the tournament across all simulation runs.
+"""
 
 from __future__ import annotations
 
@@ -97,29 +125,50 @@ class TournamentSimulator:
 
         Each match is sampled from predicted probabilities rather than using
         expected points, giving realistic upset potential.
+        
+        For example, if Brazil vs Switzerland has probabilities:
+        - Brazil win: 60%
+        - Draw: 25%
+        - Switzerland win: 15%
+        
+        We sample from this distribution (not just pick Brazil).
+        This means Switzerland can win 15% of simulations, creating realistic upsets.
+        
+        Returns:
+            (winners, runners_up, third_place)
+            - winners: group_name -> 1st place team
+            - runners_up: group_name -> 2nd place team
+            - third_place: group_name -> (3rd place team, points earned)
         """
-        rng = np.random.default_rng()  # fresh rng per call for stochasticity
+        rng = np.random.default_rng()  # Fresh RNG per call for stochasticity
         winners: dict[str, str] = {}
         runners_up: dict[str, str] = {}
         third_place: dict[str, tuple[str, float]] = {}
 
         for group_name in sorted(groups.keys()):
             group_teams = groups[group_name]
-            points: dict[str, int] = {t: 0 for t in group_teams}
-            gd: dict[str, float] = {t: 0.0 for t in group_teams}
+            points: dict[str, int] = {t: 0 for t in group_teams}  # 3 for win, 1 for draw, 0 for loss
+            gd: dict[str, float] = {t: 0.0 for t in group_teams}  # Goal difference (tiebreaker)
 
+            # Play all pairwise matches (round-robin)
             for home, away in combinations(group_teams, 2):
                 pred = self.predictor.predict(home, away)
-                r = rng.random()
+                
+                # Sample outcome from probability distribution
+                r = rng.random()  # Random number in [0, 1)
                 if r < pred.home_win_prob:
+                    # Home team wins
                     points[home] += 3
                     gd[home] += 1; gd[away] -= 1
                 elif r < pred.home_win_prob + pred.draw_prob:
+                    # Draw
                     points[home] += 1; points[away] += 1
                 else:
+                    # Away team wins
                     points[away] += 3
                     gd[away] += 1; gd[home] -= 1
 
+            # Rank teams by points, then goal difference
             ranked = sorted(group_teams, key=lambda t: (points[t], gd[t]), reverse=True)
             winners[group_name] = ranked[0]
             runners_up[group_name] = ranked[1]
@@ -152,7 +201,12 @@ class TournamentSimulator:
         return team
 
     def _knockout_winner(self, home: str, away: str, rng: np.random.Generator) -> str:
-        """Sample a knockout match winner."""
+        """Sample a knockout match winner.
+        
+        In knockout matches, draws go to extra time and penalties.
+        We simplify by treating draws as 50/50 coin flips.
+        This is reasonable because extra time and penalties are highly unpredictable.
+        """
         pred = self.predictor.predict(home, away)
         r = rng.random()
         if r < pred.home_win_prob:
@@ -160,6 +214,7 @@ class TournamentSimulator:
         elif r < pred.home_win_prob + pred.away_win_prob:
             return away
         else:
+            # Draw: flip a coin to determine winner
             return home if rng.random() < 0.5 else away
 
     def _simulate_knockout(

@@ -1,4 +1,13 @@
-"""ReportGenerator for the FIFA World Cup Predictor."""
+"""ReportGenerator for the FIFA World Cup Predictor.
+
+This module creates visualizations and summary files from model results:
+- Bar charts of win probabilities
+- Confusion matrices for model evaluation
+- Feature importance charts
+- CSV summaries of simulation results
+
+All outputs are saved to the specified output directory.
+"""
 
 from __future__ import annotations
 

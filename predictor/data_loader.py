@@ -1,4 +1,11 @@
-"""DataLoader: loads WC CSVs + international results dataset."""
+"""DataLoader: loads WC CSVs + international results dataset.
+
+This module handles all data ingestion and preprocessing:
+- Loads World Cup match data (1930-2022)
+- Loads international match results (45k+ matches for ELO calculation)
+- Normalizes team names across different naming conventions
+- Validates data integrity and handles missing values
+"""
 
 import logging
 import os
@@ -17,11 +24,16 @@ logger = logging.getLogger(__name__)
 
 
 class DataLoader:
-    """Loads all data sources and normalises team names via former_names.csv."""
+    """Loads all data sources and normalises team names via former_names.csv.
+    
+    Team name normalization is critical because countries change names over time
+    (e.g., "West Germany" → "Germany", "Soviet Union" → "Russia").
+    Without normalization, we'd treat these as different teams and lose historical data.
+    """
 
     def __init__(self, data_dir: str):
         self.data_dir = data_dir
-        self._name_map: dict[str, str] = {}  # former -> current
+        self._name_map: dict[str, str] = {}  # Maps former team names to current names
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -48,26 +60,31 @@ class DataLoader:
         # Required international results
         results_df = self._read_csv(RESULTS_FILENAME, required=True)
 
-        # Validate & clean
+        # Validate & clean: remove rows with missing required data
+        # This ensures we don't train on incomplete records
         matches_df = self._drop_nulls(matches_df, MATCHES_REQUIRED_COLS, MATCHES_FILENAME)
         players_df = self._drop_nulls(players_df, PLAYERS_REQUIRED_COLS, PLAYERS_FILENAME)
         cups_df = self._drop_nulls(cups_df, CUPS_REQUIRED_COLS, CUPS_FILENAME)
         results_df = self._drop_nulls(results_df, RESULTS_REQUIRED_COLS, RESULTS_FILENAME)
 
+        # Remove duplicate matches (same MatchID appearing multiple times)
         matches_df = self._deduplicate_match_id(matches_df)
+        
+        # Parse datetime strings into proper datetime objects and extract year
         matches_df = self._parse_wc_datetime(matches_df)
         
-        # Drop rows where Year is still NaN after datetime parsing
+        # Ensure Year column is clean and numeric
         matches_df = matches_df.dropna(subset=["Year"]).reset_index(drop=True)
         matches_df["Year"] = matches_df["Year"].astype(int)
 
-        # Parse results.csv date and extract year
+        # Parse international results dates and extract year for temporal filtering
         results_df["date"] = pd.to_datetime(results_df["date"], errors="coerce")
         results_df["year"] = results_df["date"].dt.year
         results_df = results_df.dropna(subset=["year"])
         results_df["year"] = results_df["year"].astype(int)
 
-        # Normalise team names in results_df
+        # Apply team name normalization to international results
+        # This ensures "West Germany" in results.csv matches "Germany" in WC data
         results_df["home_team"] = results_df["home_team"].map(
             lambda x: self._name_map.get(x, x)
         )
@@ -75,7 +92,7 @@ class DataLoader:
             lambda x: self._name_map.get(x, x)
         )
 
-        # Also normalise WC team names
+        # Apply same normalization to World Cup matches
         matches_df["Home Team Name"] = matches_df["Home Team Name"].map(
             lambda x: self._name_map.get(x, x)
         )
@@ -83,7 +100,8 @@ class DataLoader:
             lambda x: self._name_map.get(x, x)
         )
 
-        # neutral column: coerce to bool
+        # Parse neutral venue flag (TRUE/FALSE string → boolean)
+        # World Cup matches are always neutral, but qualifiers may not be
         if "neutral" in results_df.columns:
             results_df["neutral"] = results_df["neutral"].map(
                 lambda x: str(x).strip().upper() == "TRUE"
@@ -101,16 +119,26 @@ class DataLoader:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _load_former_names(self):
-        """Build former->current name map from former_names.csv (optional)."""
+        """Build former->current name map from former_names.csv (optional).
+        
+        This mapping ensures consistency across datasets. For example:
+        - "West Germany" and "Germany FR" both map to "Germany"
+        - "Soviet Union" maps to "Russia" (closest successor state)
+        - "Korea Republic" maps to "South Korea" (common name)
+        """
         path = os.path.join(self.data_dir, FORMER_NAMES_FILENAME)
         if not os.path.exists(path):
             logger.warning("former_names.csv not found; skipping name normalisation.")
             return
+        
+        # Load mappings from CSV file
         df = pd.read_csv(path)
         if "current" in df.columns and "former" in df.columns:
             for _, row in df.iterrows():
                 self._name_map[row["former"]] = row["current"]
-        # Hard-code common WC-era aliases not covered by the file
+        
+        # Add hard-coded aliases for common World Cup-era name changes
+        # These cover historical teams that may not be in former_names.csv
         extra = {
             "Germany FR": "Germany",
             "West Germany": "Germany",
